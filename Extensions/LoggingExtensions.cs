@@ -279,21 +279,35 @@ public sealed class FileLogger : ILogger, IDisposable
                 return;
             }
             
-            try
+            for (int retries = 0; retries < 3; retries++)
             {
-                // Ensure the writer is created
-                EnsureWriterCreated();
-                
-                // Check file size and roll if needed
-                CheckForRollFile();
-                
-                // Write the message
-                _streamWriter!.WriteLine(message);
-                _streamWriter.Flush();
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Error writing to log file: {ex.Message}");
+                try
+                {
+                    // Ensure the writer is created
+                    EnsureWriterCreated();
+                    
+                    // Check file size and roll if needed
+                    CheckForRollFile();
+                    
+                    // Write the message
+                    _streamWriter?.WriteLine(message);
+                    _streamWriter?.Flush();
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    if (retries == 2)
+                    {
+                        Console.Error.WriteLine($"Error writing to log file after retries: {ex.Message}");
+                        return;
+                    }
+                    Thread.Sleep(100); // Wait before retry
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error writing to log file: {ex.Message}");
+                    return;
+                }
             }
         }
     }

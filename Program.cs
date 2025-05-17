@@ -41,7 +41,6 @@ public static class Program
         int? ThreadCount,
         bool Delete,
         bool NoDelete,
-        FileInfo? LogFile,
         bool Verbose);
     
     // Default values
@@ -144,12 +143,7 @@ public static class Program
             getDefaultValue: () => false);
         rootCommand.AddOption(noDeleteOption);
         
-        // Log file option
-        var logFileOption = new Option<FileInfo?>(
-            aliases: new[] { "--log", "-g" },
-            description: "Path to the log file",
-            getDefaultValue: () => null);
-        rootCommand.AddOption(logFileOption);
+        // Log file option removed
         
         // Verbose option
         var verboseOption = new Option<bool>(
@@ -168,11 +162,11 @@ public static class Program
             var threads = context.ParseResult.GetValueForOption(threadCountOption);
             var delete = context.ParseResult.GetValueForOption(deleteOption);
             var noDelete = context.ParseResult.GetValueForOption(noDeleteOption);
-            var log = context.ParseResult.GetValueForOption(logFileOption);
+            // Log file option removed
             var verbose = context.ParseResult.GetValueForOption(verboseOption);
 
             var options = new CommandOptions(source, output, sevenZip, level, threads, 
-                delete, noDelete, log, verbose);
+                delete, noDelete, verbose);
             int exitCode = 0;
             
             // Setup cancellation token
@@ -192,7 +186,6 @@ public static class Program
                 compressionLevel: options.CompressionLevel,
                 threadCount: options.ThreadCount,
                 delete: options.NoDelete ? false : options.Delete, // no-delete overrides delete
-                logFilePath: options.LogFile?.FullName ?? Path.Combine(options.Source.FullName, $"compression_{DateTime.Now:yyyyMMdd_HHmmss}.log"),
                 verbose: options.Verbose);
             
             try
@@ -261,35 +254,29 @@ public static class Program
         int compressionLevel,
         int? threadCount,
         bool delete,
-        string logFilePath,
         bool verbose)
     {
         var services = new ServiceCollection();
         
-        // Get unique log file path
-        var uniqueLogPath = Path.Combine(
-            Path.GetDirectoryName(logFilePath)!,
-            $"{Path.GetFileNameWithoutExtension(logFilePath)}_{Guid.NewGuid():N}{Path.GetExtension(logFilePath)}");
+        // Register progress reporter
+        services.AddSingleton<IProgress<CompressionProgress>>(sp => 
+            new Progress<CompressionProgress>(progress => UpdateProgress(progress)));
         
-        // Configure logging
+        // Configure logging to console only
         services.AddLogging(builder =>
         {
             builder.AddSimpleConsole(options =>
             {
                 options.SingleLine = false;
-                options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
+                options.TimestampFormat = "HH:mm:ss ";
                 options.UseUtcTimestamp = false;
                 options.ColorBehavior = LoggerColorBehavior.Enabled;
             });
-            
-            builder.AddFile(uniqueLogPath);
             
             builder.SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information);
         });
         
         // Register configuration
-        // We already created a unique log file path above, now just set it in the configuration
-        var uniqueLogFilePath = uniqueLogPath;
         
         var config = new CompressionConfig
         {
@@ -297,14 +284,16 @@ public static class Program
             OutputDirectory = outputPath,
             CompressionLevel = compressionLevel,
             ThreadCount = threadCount ?? Math.Max(1, Environment.ProcessorCount - 1),
-            DeleteAfterCompression = delete,
-            LogFilePath = uniqueLogFilePath
+            DeleteAfterCompression = delete
         };
         
         services.AddSingleton(config);
         
-        // Register compression service
-        services.AddSingleton<CompressionService>();
+        // Register compression service with progress reporter
+        services.AddSingleton<CompressionService>(sp => new CompressionService(
+            sp.GetRequiredService<CompressionConfig>(),
+            sp.GetRequiredService<ILogger<CompressionService>>(),
+            sp.GetRequiredService<IProgress<CompressionProgress>>()));
         
         return services;
     }
@@ -509,9 +498,25 @@ private static async Task<bool> RunCompressionAsync(
             try
             {
                 // Setup progress reporting
-                var progress = new Progress<CompressionResult>(result =>
+                var progress = new Progress<object>(obj =>
                 {
-                    UpdateProgress(result);
+                    if (obj is CompressionResult result)
+                    {
+                        UpdateProgress(result);
+                    }
+                    else if (obj is CompressionProgress progressInfo)
+                    {
+                        // Clear current line
+                        Console.Write("\r" + new string(' ', Console.BufferWidth - 1));
+                        Console.Write("\r");
+                        
+                        var percent = progressInfo.PercentComplete.ToString("F1").PadLeft(5);
+                        var speed = FormatSpeed(progressInfo.Speed);
+                        var processed = FormatSize(progressInfo.BytesProcessed);
+                        var total = FormatSize(progressInfo.TotalBytes);
+                        
+                        Console.Write($"Progress: {percent}% | {processed}/{total} | {speed}/s | Using {progressInfo.Threads} threads");
+                    }
                 });
                 
                 // Compress the folder
@@ -562,6 +567,40 @@ private static async Task<bool> RunCompressionAsync(
         {
             Console.Write($"\rCalculated source size: {FormatSize(result.SourceSize)}");
         }
+    }
+    
+    /// <summary>
+    /// Updates the progress display with detailed compression information.
+    /// </summary>
+    /// <param name="progress">Compression progress.</param>
+    private static void UpdateProgress(CompressionProgress progress)
+    {
+        var percent = progress.PercentComplete.ToString("F1").PadLeft(5);
+        var speed = FormatSpeed(progress.Speed);
+        var processed = FormatSize(progress.BytesProcessed);
+        var total = FormatSize(progress.TotalBytes);
+        
+        Console.Write($"\rProgress: {percent}% | {processed}/{total} | {speed} | Using {progress.Threads} threads");
+    }
+    
+    /// <summary>
+    /// Formats a speed value in human-readable format.
+    /// </summary>
+    /// <param name="bytesPerSecond">Speed in bytes per second.</param>
+    /// <returns>Formatted speed string.</returns>
+    private static string FormatSpeed(double bytesPerSecond)
+    {
+        var sizes = new[] { "B", "KB", "MB", "GB" };
+        var speed = bytesPerSecond;
+        var order = 0;
+        
+        while (speed >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            speed /= 1024;
+        }
+        
+        return $"{speed:F2} {sizes[order]}";
     }
     
     /// <summary>
@@ -862,8 +901,7 @@ private static async Task<bool> RunCompressionAsync(
         
         argsList.Add(deleteFlag ? "--delete" : "--no-delete");
         
-        // Add log file path
-        argsList.AddRange(new[] { "--log", logFilePath });
+        // Log file path removed
         
         return await Main(argsList.ToArray());
     }

@@ -17,6 +17,7 @@ public sealed class CompressionService : IAsyncDisposable
     private readonly ILogger<CompressionService> _logger = null!;
     private readonly SemaphoreSlim _processLock = new(1, 1);
     private readonly CancellationTokenSource _disposalCts = new();
+    private readonly IProgress<CompressionProgress>? _progress = null;
     private bool _disposed;
 
     /// <summary>
@@ -26,10 +27,14 @@ public sealed class CompressionService : IAsyncDisposable
     /// <param name="logger">Logger instance.</param>
     /// <exception cref="ArgumentNullException">Thrown when any parameter is null.</exception>
     /// <exception cref="ArgumentException">Thrown when configuration is invalid.</exception>
-    public CompressionService(CompressionConfig config, ILogger<CompressionService> logger)
+    public CompressionService(
+        CompressionConfig config, 
+        ILogger<CompressionService> logger,
+        IProgress<CompressionProgress>? progress = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _progress = progress;
         
         // Validate the configuration
         config.Validate();
@@ -218,6 +223,41 @@ public sealed class CompressionService : IAsyncDisposable
         string zstdFilePath,
         CancellationToken cancellationToken)
     {
+        var startTime = DateTime.Now;
+        var sourceSize = new FileInfo(tarFilePath).Length;
+        var lastUpdate = DateTime.Now;
+        var lastSize = 0L;
+        
+        // Report progress every second
+        using var progressTimer = new Timer(_ =>
+        {
+            try
+            {
+                if (!File.Exists(zstdFilePath)) return;
+                
+                var currentSize = new FileInfo(zstdFilePath).Length;
+                var now = DateTime.Now;
+                var elapsed = (now - lastUpdate).TotalSeconds;
+                
+                if (elapsed > 0)
+                {
+                    var speed = (currentSize - lastSize) / elapsed;
+                    _progress?.Report(new CompressionProgress(
+                        BytesProcessed: currentSize,
+                        TotalBytes: sourceSize,
+                        Speed: speed,
+                        Threads: _config.ThreadCount));
+                    
+                    lastUpdate = now;
+                    lastSize = currentSize;
+                }
+            }
+            catch
+            {
+                // Ignore errors during progress reporting
+            }
+        }, null, 0, 1000);
+        
         // Use correct ZSTD compression command syntax
         var arguments = $"a -mm=zstd -mx={_config.CompressionLevel} -mmt={_config.ThreadCount} {EscapePath(zstdFilePath)} {EscapePath(tarFilePath)}";
         

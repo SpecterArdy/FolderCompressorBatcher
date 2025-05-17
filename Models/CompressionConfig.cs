@@ -27,10 +27,7 @@ public sealed record CompressionConfig
     /// </summary>
     public int ThreadCount { get; init; } = Math.Max(1, Environment.ProcessorCount - 1);
 
-    /// <summary>
-    /// Path to the log file.
-    /// </summary>
-    public required string LogFilePath { get; init; }
+    // Log file path removed
 
     /// <summary>
     /// Whether to delete source folders after successful compression.
@@ -57,9 +54,6 @@ public sealed record CompressionConfig
 
         if (ThreadCount < 1)
             throw new ArgumentException($"Thread count must be at least 1, got: {ThreadCount}", nameof(ThreadCount));
-
-        if (string.IsNullOrWhiteSpace(LogFilePath))
-            throw new ArgumentException("Log file path cannot be empty", nameof(LogFilePath));
     }
 }
 
