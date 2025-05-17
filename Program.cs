@@ -266,6 +266,11 @@ public static class Program
     {
         var services = new ServiceCollection();
         
+        // Get unique log file path
+        var uniqueLogPath = Path.Combine(
+            Path.GetDirectoryName(logFilePath)!,
+            $"{Path.GetFileNameWithoutExtension(logFilePath)}_{Guid.NewGuid():N}{Path.GetExtension(logFilePath)}");
+        
         // Configure logging
         services.AddLogging(builder =>
         {
@@ -277,17 +282,14 @@ public static class Program
                 options.ColorBehavior = LoggerColorBehavior.Enabled;
             });
             
-            builder.AddFile(logFilePath);
+            builder.AddFile(uniqueLogPath);
             
             builder.SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information);
         });
         
         // Register configuration
-        // Use a unique log file name based on timestamp
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var uniqueLogFilePath = string.IsNullOrEmpty(logFilePath) 
-            ? Path.Combine(Path.GetDirectoryName(sourcePath)!, $"compression_{timestamp}.log")
-            : logFilePath;
+        // We already created a unique log file path above, now just set it in the configuration
+        var uniqueLogFilePath = uniqueLogPath;
         
         var config = new CompressionConfig
         {
@@ -327,23 +329,31 @@ private static bool ValidateDirectoryRelationship(string sourcePath, string outp
     var outputDirInfo = new DirectoryInfo(outputPath);
     var sourceDirInfo = new DirectoryInfo(sourcePath);
 
-    // If they share the same parent but are different directories, they're safe
-    if (outputDirInfo.Parent?.FullName == sourceDirInfo.Parent?.FullName &&
-        !string.Equals(outputDirInfo.FullName, sourceDirInfo.FullName, StringComparison.OrdinalIgnoreCase))
-    {
-        return true;
-    }
-
     var sourcePathNorm = Path.GetFullPath(sourcePath).TrimEnd(Path.DirectorySeparatorChar);
     var outputPathNorm = Path.GetFullPath(outputPath).TrimEnd(Path.DirectorySeparatorChar);
 
-    if (outputPathNorm.StartsWith(sourcePathNorm, StringComparison.OrdinalIgnoreCase))
+    // Remove trailing directory separator for accurate path comparison
+    if (sourcePathNorm.EndsWith(Path.DirectorySeparatorChar))
+        sourcePathNorm = sourcePathNorm.TrimEnd(Path.DirectorySeparatorChar);
+    if (outputPathNorm.EndsWith(Path.DirectorySeparatorChar))
+        outputPathNorm = outputPathNorm.TrimEnd(Path.DirectorySeparatorChar);
+
+    // Check if directories are the same
+    if (string.Equals(sourcePathNorm, outputPathNorm, StringComparison.OrdinalIgnoreCase))
+    {
+        errorMessage = "Output directory cannot be the same as source directory";
+        return false;
+    }
+
+    // Check if output is inside source
+    if (outputPathNorm.StartsWith(sourcePathNorm + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
     {
         errorMessage = "Output directory cannot be inside source directory\nThis could lead to recursive compression attempts.";
         return false;
     }
 
-    if (sourcePathNorm.StartsWith(outputPathNorm, StringComparison.OrdinalIgnoreCase))
+    // Check if source is inside output
+    if (sourcePathNorm.StartsWith(outputPathNorm + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
     {
         errorMessage = "Source directory cannot be inside output directory\nThis could lead to data loss.";
         return false;

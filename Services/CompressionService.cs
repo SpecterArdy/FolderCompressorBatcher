@@ -200,7 +200,7 @@ public sealed class CompressionService : IAsyncDisposable
         string tarFilePath,
         CancellationToken cancellationToken)
     {
-        var arguments = $"a -ttar \"{tarFilePath}\" \"{folderPath}\"";
+        var arguments = $"a -ttar {EscapePath(tarFilePath)} {EscapePath(folderPath)}";
         
         await ExecuteSevenZipAsync(arguments, "TAR archive creation", cancellationToken);
     }
@@ -218,7 +218,8 @@ public sealed class CompressionService : IAsyncDisposable
         string zstdFilePath,
         CancellationToken cancellationToken)
     {
-        var arguments = $"a -m0=zstd -mx={_config.CompressionLevel} -mmt={_config.ThreadCount} \"{zstdFilePath}\" \"{tarFilePath}\"";
+        // Use correct ZSTD compression command syntax
+        var arguments = $"a -mm=zstd -mx={_config.CompressionLevel} -mmt={_config.ThreadCount} {EscapePath(zstdFilePath)} {EscapePath(tarFilePath)}";
         
         await ExecuteSevenZipAsync(arguments, "ZSTD compression", cancellationToken);
     }
@@ -235,7 +236,7 @@ public sealed class CompressionService : IAsyncDisposable
     {
         try
         {
-            var arguments = $"t \"{archivePath}\"";
+            var arguments = $"t {EscapePath(archivePath)}";
             
             await ExecuteSevenZipAsync(arguments, "Archive verification", cancellationToken);
             
@@ -274,7 +275,8 @@ public sealed class CompressionService : IAsyncDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(_config.SevenZipPath) // Add working directory
             };
             
             var outputBuilder = new StringBuilder();
@@ -285,6 +287,7 @@ public sealed class CompressionService : IAsyncDisposable
                 if (e.Data != null)
                 {
                     outputBuilder.AppendLine(e.Data);
+                    _logger.LogDebug("7-Zip output: {Output}", e.Data);
                 }
             };
             
@@ -293,10 +296,16 @@ public sealed class CompressionService : IAsyncDisposable
                 if (e.Data != null)
                 {
                     errorBuilder.AppendLine(e.Data);
+                    _logger.LogWarning("7-Zip error: {Error}", e.Data);
                 }
             };
             
-            _logger.LogDebug("Executing 7-Zip: {Arguments}", arguments);
+            _logger.LogInformation("Executing 7-Zip command: {Command} {Arguments}", 
+                _config.SevenZipPath, arguments);
+
+            // Add the complete command line for easier debugging
+            var fullCommand = $"\"{_config.SevenZipPath}\" {arguments}";
+            _logger.LogDebug("Full command line: {Command}", fullCommand);
             
             process.Start();
             process.BeginOutputReadLine();
@@ -409,6 +418,16 @@ public sealed class CompressionService : IAsyncDisposable
         }
         
         return size;
+    }
+    
+    /// <summary>
+    /// Escapes a path for use in command line arguments.
+    /// </summary>
+    /// <param name="path">The path to escape.</param>
+    /// <returns>The escaped path.</returns>
+    private static string EscapePath(string path)
+    {
+        return path.Contains(" ") ? $"\"{path}\"" : path;
     }
     
     /// <summary>
