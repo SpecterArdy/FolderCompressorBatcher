@@ -314,6 +314,51 @@ public static class Program
 /// <param name="sourcePath">Source directory path.</param>
 /// <param name="cancellationToken">Cancellation token.</param>
 /// <returns>True if successful, false otherwise.</returns>
+/// <summary>
+/// Validates the relationship between source and output directories to prevent recursive or unsafe operations.
+/// </summary>
+/// <param name="sourcePath">Source directory path.</param>
+/// <param name="outputPath">Output directory path.</param>
+/// <param name="errorMessage">Output error message if validation fails.</param>
+/// <returns>True if the relationship is valid, false otherwise.</returns>
+private static bool ValidateDirectoryRelationship(string sourcePath, string outputPath, out string? errorMessage)
+{
+    errorMessage = null;
+    var outputDirInfo = new DirectoryInfo(outputPath);
+    var sourceDirInfo = new DirectoryInfo(sourcePath);
+
+    // If they share the same parent but are different directories, they're safe
+    if (outputDirInfo.Parent?.FullName == sourceDirInfo.Parent?.FullName &&
+        !string.Equals(outputDirInfo.FullName, sourceDirInfo.FullName, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    var sourcePathNorm = Path.GetFullPath(sourcePath).TrimEnd(Path.DirectorySeparatorChar);
+    var outputPathNorm = Path.GetFullPath(outputPath).TrimEnd(Path.DirectorySeparatorChar);
+
+    if (outputPathNorm.StartsWith(sourcePathNorm, StringComparison.OrdinalIgnoreCase))
+    {
+        errorMessage = "Output directory cannot be inside source directory\nThis could lead to recursive compression attempts.";
+        return false;
+    }
+
+    if (sourcePathNorm.StartsWith(outputPathNorm, StringComparison.OrdinalIgnoreCase))
+    {
+        errorMessage = "Source directory cannot be inside output directory\nThis could lead to data loss.";
+        return false;
+    }
+
+    return true;
+}
+
+/// <summary>
+/// Runs the compression process.
+/// </summary>
+/// <param name="serviceProvider">Service provider.</param>
+/// <param name="sourcePath">Source directory path.</param>
+/// <param name="cancellationToken">Cancellation token.</param>
+/// <returns>True if successful, false otherwise.</returns>
 private static async Task<bool> RunCompressionAsync(
     ServiceProvider serviceProvider,
     string sourcePath,
@@ -394,24 +439,12 @@ private static async Task<bool> RunCompressionAsync(
         }
     }
 
-    // Check if output directory is not inside source directory
-    if (config.OutputDirectory.StartsWith(sourcePath, StringComparison.OrdinalIgnoreCase))
+    // Validate directory relationship
+    if (!ValidateDirectoryRelationship(sourcePath, config.OutputDirectory, out var dirErrorMessage))
     {
-        logger.LogError("Output directory cannot be inside source directory");
+        logger.LogError(dirErrorMessage);
         Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine("Error: Output directory cannot be inside source directory");
-        Console.WriteLine("This could lead to recursive compression attempts.");
-        Console.ResetColor();
-        return false;
-    }
-
-    // Check if source directory is not inside output directory
-    if (sourcePath.StartsWith(config.OutputDirectory, StringComparison.OrdinalIgnoreCase))
-    {
-        logger.LogError("Source directory cannot be inside output directory");
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine("Error: Source directory cannot be inside output directory");
-        Console.WriteLine("This could lead to data loss.");
+        Console.WriteLine($"Error: {dirErrorMessage}");
         Console.ResetColor();
         return false;
     }
@@ -746,20 +779,10 @@ private static async Task<bool> RunCompressionAsync(
         }
         
         // Validate directory relationships before attempting to create
-        if (outputPath.StartsWith(sourcePath, StringComparison.OrdinalIgnoreCase))
+        if (!ValidateDirectoryRelationship(sourcePath, outputPath, out var dirErrorMessage))
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("\nError: Output directory cannot be inside source directory");
-            Console.WriteLine("This could lead to recursive compression attempts.");
-            Console.ResetColor();
-            return 1;
-        }
-        
-        if (sourcePath.StartsWith(outputPath, StringComparison.OrdinalIgnoreCase))
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("\nError: Source directory cannot be inside output directory");
-            Console.WriteLine("This could lead to data loss.");
+            Console.WriteLine($"\nError: {dirErrorMessage}");
             Console.ResetColor();
             return 1;
         }

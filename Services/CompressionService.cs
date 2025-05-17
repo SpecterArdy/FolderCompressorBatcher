@@ -13,8 +13,8 @@ namespace Folder_Compressor_Batcher.Services;
 /// </summary>
 public sealed class CompressionService : IAsyncDisposable
 {
-    private readonly CompressionConfig _config;
-    private readonly ILogger<CompressionService> _logger;
+    private readonly CompressionConfig _config = null!;
+    private readonly ILogger<CompressionService> _logger = null!;
     private readonly SemaphoreSlim _processLock = new(1, 1);
     private readonly CancellationTokenSource _disposalCts = new();
     private bool _disposed;
@@ -416,6 +416,7 @@ public sealed class CompressionService : IAsyncDisposable
     /// </summary>
     /// <exception cref="ObjectDisposedException">Thrown when this instance has been disposed.</exception>
     [MemberNotNull(nameof(_config), nameof(_logger))]
+    [System.Diagnostics.CodeAnalysis.MemberNotNullWhen(false, nameof(_config), nameof(_logger))]
     private void ThrowIfDisposed([CallerMemberName] string? callerName = null)
     {
         if (_disposed)
@@ -423,6 +424,12 @@ public sealed class CompressionService : IAsyncDisposable
             throw new ObjectDisposedException(
                 GetType().Name,
                 $"Cannot access the {callerName} method because this instance has been disposed.");
+        }
+        
+        // Explicitly check for null to satisfy the compiler
+        if (_config is null || _logger is null)
+        {
+            throw new InvalidOperationException("Service was not properly initialized");
         }
     }
     
