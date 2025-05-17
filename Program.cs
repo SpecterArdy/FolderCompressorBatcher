@@ -192,7 +192,7 @@ public static class Program
                 compressionLevel: options.CompressionLevel,
                 threadCount: options.ThreadCount,
                 delete: options.NoDelete ? false : options.Delete, // no-delete overrides delete
-                logFilePath: options.LogFile?.FullName ?? Path.Combine(options.Source.FullName, "compression.log"),
+                logFilePath: options.LogFile?.FullName ?? Path.Combine(options.Source.FullName, $"compression_{DateTime.Now:yyyyMMdd_HHmmss}.log"),
                 verbose: options.Verbose);
             
             try
@@ -283,6 +283,12 @@ public static class Program
         });
         
         // Register configuration
+        // Use a unique log file name based on timestamp
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var uniqueLogFilePath = string.IsNullOrEmpty(logFilePath) 
+            ? Path.Combine(Path.GetDirectoryName(sourcePath)!, $"compression_{timestamp}.log")
+            : logFilePath;
+        
         var config = new CompressionConfig
         {
             SevenZipPath = sevenZipPath,
@@ -290,7 +296,7 @@ public static class Program
             CompressionLevel = compressionLevel,
             ThreadCount = threadCount ?? Math.Max(1, Environment.ProcessorCount - 1),
             DeleteAfterCompression = delete,
-            LogFilePath = logFilePath
+            LogFilePath = uniqueLogFilePath
         };
         
         services.AddSingleton(config);
@@ -718,6 +724,63 @@ private static async Task<bool> RunCompressionAsync(
         Console.Write("\nEnter output directory (leave blank for default): ");
         var outputPath = Console.ReadLine()?.Trim();
         
+        // If no output directory specified, create a default path
+        if (string.IsNullOrEmpty(outputPath))
+        {
+            var sourceDir = new DirectoryInfo(sourcePath);
+            if (sourceDir.Parent == null)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("\nError: Cannot determine default output directory for root path");
+                Console.WriteLine("Please specify an output directory explicitly");
+                Console.ResetColor();
+                return 1;
+            }
+            
+            // Create output directory as a sibling to the source directory with timestamp
+            outputPath = Path.Combine(
+                sourceDir.Parent.FullName,
+                $"{sourceDir.Name}_Compressed_{DateTime.Now:yyyyMMddHHmmss}");
+            
+            Console.WriteLine($"\nUsing default output directory: {outputPath}");
+        }
+        
+        // Validate directory relationships before attempting to create
+        if (outputPath.StartsWith(sourcePath, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("\nError: Output directory cannot be inside source directory");
+            Console.WriteLine("This could lead to recursive compression attempts.");
+            Console.ResetColor();
+            return 1;
+        }
+        
+        if (sourcePath.StartsWith(outputPath, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("\nError: Source directory cannot be inside output directory");
+            Console.WriteLine("This could lead to data loss.");
+            Console.ResetColor();
+            return 1;
+        }
+        
+        // Create output directory if it doesn't exist
+        if (!Directory.Exists(outputPath))
+        {
+            try
+            {
+                Directory.CreateDirectory(outputPath);
+                Console.WriteLine($"Created output directory: {outputPath}");
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\nError: Could not create output directory: {ex.Message}");
+                Console.ResetColor();
+                return 1;
+            }
+        }
+        
         // Ask about compression level
         Console.Write("\nEnter compression level (1-22, blank for default 11): ");
         var levelInput = Console.ReadLine()?.Trim();
@@ -746,13 +809,18 @@ private static async Task<bool> RunCompressionAsync(
             ? "\nDeletion is ENABLED - source folders will be deleted after successful compression." 
             : "\nDeletion is DISABLED - source folders will be preserved.");
 
+        // Generate a unique log file path
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var processId = Environment.ProcessId;
+        var logFilePath = Path.Combine(
+            Path.GetDirectoryName(sourcePath)!, 
+            $"compression_{timestamp}_{processId}.log");
+        
         // Build argument list
         var argsList = new List<string> { "--source", sourcePath };
         
-        if (!string.IsNullOrEmpty(outputPath))
-        {
-            argsList.AddRange(new[] { "--output", outputPath });
-        }
+        // Always include the output path (it's either user-specified or default)
+        argsList.AddRange(new[] { "--output", outputPath });
         
         if (level.HasValue)
         {
@@ -760,6 +828,9 @@ private static async Task<bool> RunCompressionAsync(
         }
         
         argsList.Add(deleteFlag ? "--delete" : "--no-delete");
+        
+        // Add log file path
+        argsList.AddRange(new[] { "--log", logFilePath });
         
         return await Main(argsList.ToArray());
     }
